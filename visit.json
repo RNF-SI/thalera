@@ -1,0 +1,28 @@
+{
+  "genre": "F",
+  "label": "Visite",
+  "label_list": "Visites",
+  "display_properties": [
+    "visit_date_min",
+    "observers",
+    "comments",
+    "nb_observations"
+  ],
+  "display_list": [
+    "visit_date_min",
+    "nb_observations"
+  ],
+  "specific": {
+    "visit_date_min": {
+      "type_widget": "date",
+      "attribut_label": "Date de la visite",
+      "required": true
+    },
+    "nb_observations": {
+      "hidden": true
+    },
+    "medias": {
+      "hidden": true
+    }
+  }
+}

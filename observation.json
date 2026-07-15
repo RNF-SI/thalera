@@ -1,0 +1,17 @@
+{
+  "genre": "F",
+  "label": "Observation",
+  "label_list": "Observations",
+  "display_properties": [
+    "cd_nom",
+    "comments"
+  ],
+  "display_list": [
+    "cd_nom"
+  ],
+  "specific": {
+    "medias": {
+      "hidden": true
+    }
+  }
+}

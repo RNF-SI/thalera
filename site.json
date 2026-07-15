@@ -1,0 +1,42 @@
+{
+  "genre": "F",
+  "geometry_type": "Point",
+  "label": "Site",
+  "label_list": "Sites",
+  "display_properties": [
+    "base_site_name",
+    "base_site_code",
+    "last_visit",
+    "nb_visits"
+  ],
+  "display_list": [
+    "base_site_name",
+    "base_site_code",
+    "last_visit",
+    "nb_visits"
+  ],
+  "specific": {
+    "types_site": {
+      "default": "__MODULE.IDS_TYPE_SITE",
+      "hidden": true
+    },
+    "base_site_name": {
+      "type_widget": "text",
+      "attribut_label": "Nom du site",
+      "required": true
+    },
+    "base_site_code": {
+      "type_widget": "text",
+      "attribut_label": "Code du site",
+      "required": false
+    },
+    "id_inventor": {
+      "required": false,
+      "hidden": true
+    },
+    "first_use_date": {
+      "required": false,
+      "hidden": true
+    }
+  }
+}
