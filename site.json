@@ -1,5 +1,5 @@
 {
-  "genre": "F",
+  "genre": "M",
   "geometry_type": "Point",
   "label": "Site",
   "label_list": "Sites",
@@ -7,13 +7,15 @@
     "base_site_name",
     "base_site_code",
     "last_visit",
-    "nb_visits"
+    "nb_visits",
+    "nb_observations_non_valide"
   ],
   "display_list": [
     "base_site_name",
     "base_site_code",
     "last_visit",
-    "nb_visits"
+    "nb_visits",
+    "nb_observations_non_valide"
   ],
   "specific": {
     "types_site": {
@@ -29,6 +31,12 @@
       "type_widget": "text",
       "attribut_label": "Code du site",
       "required": false
+    },
+    "nb_observations_non_valide": {
+      "type_widget": "number",
+      "attribut_label": "Nombre d'observations non validées",
+      "required": false,
+      "hidden": true
     },
     "id_inventor": {
       "required": false,

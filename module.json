@@ -1,4 +1,16 @@
 {
   "module_label": "Thalera",
-  "module_desc": "Module de suivi Thalera porté par Réserves Naturelles de France"
+  "module_desc": "Module de controle des données de Thalera porté par Réserves Naturelles de France",
+  "export_csv": [
+    {
+      "label": "Export photos (CSV)",
+      "type": "csv",
+      "method": "standard"
+    },
+    {
+      "label": "Récapitulatif par espèce (CSV)",
+      "type": "csv",
+      "method": "recap_especes"
+    }
+  ]
 }

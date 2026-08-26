@@ -1,17 +1,52 @@
 {
   "genre": "F",
-  "label": "Observation",
-  "label_list": "Observations",
+  "label": "Photo",
+  "label_list": "Photos",
   "display_properties": [
     "cd_nom",
-    "comments"
+    "taxon_ebms",
+    "score_ia",
+    "comments",
+    "taxon_valide",
+    "new_cd_nom"
   ],
   "display_list": [
-    "cd_nom"
+    "cd_nom",
+    "taxon_valide"
   ],
   "specific": {
-    "medias": {
+    "cd_nom": {
+      "label": "Taxon identifié par l'IA",
       "hidden": true
+    },
+    "taxon_ebms": {
+      "type_widget": "text",
+      "attribut_label": "Taxon EBMS (libellé d'origine)",
+      "description": "Nom du taxon tel que fourni par EBMS, avant concordance Taxref"
+    },
+    "score_ia": {
+      "attribut_label": "Score de confiance IA",
+      "type_widget": "number",
+      "hidden": true
+    },
+    "comments": {
+      "attribut_label": "Commentaires de l'observateur",
+      "type_widget": "text",
+      "hidden": true
+    },
+    "taxon_valide": {
+      "type_widget": "select",
+      "attribut_label": "Validation du taxon IA",
+      "required": true,
+      "values": ["Bon taxon identifié", "Mauvais taxon identifié", "Pas de confirmation possible"]
+    },
+    "new_cd_nom": {
+      "type_widget": "taxonomy",
+      "attribut_label": "Espèce réelle",
+      "type_util": "taxonomy",
+      "id_list": "__MODULE.ID_LIST_TAXONOMY",
+      "hidden": "({value}) => (value.taxon_valide != 'Mauvais taxon identifié')",
+      "required": "({value}) => (value.taxon_valide == 'Mauvais taxon identifié')"
     }
   }
 }

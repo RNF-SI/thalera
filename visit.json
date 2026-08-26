@@ -6,11 +6,13 @@
     "visit_date_min",
     "observers",
     "comments",
-    "nb_observations"
+    "nb_observations",
+    "nb_observations_non_valide"
   ],
   "display_list": [
     "visit_date_min",
-    "nb_observations"
+    "nb_observations",
+    "nb_observations_non_valide"
   ],
   "specific": {
     "visit_date_min": {
@@ -19,6 +21,12 @@
       "required": true
     },
     "nb_observations": {
+      "hidden": true
+    },
+    "nb_observations_non_valide": {
+      "type_widget": "number",
+      "attribut_label": "Nombre d'observations non validées",
+      "required": false,
       "hidden": true
     },
     "medias": {
