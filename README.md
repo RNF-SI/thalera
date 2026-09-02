@@ -99,9 +99,35 @@ THALERA_ID_DATASET=<id_dataset>
 THALERA_ID_DIGITISER=<id_role>
 THALERA_TAXONS_CSV=/chemin/absolu/ebms_rnfrance_taxons.csv
 THALERA_STATE_FILE=/home/geonatureadmin/modules_monitoring/thalera/.import_ebms_state.json
+THALERA_CD_NOM_FALLBACK=<cd_nom Lepidoptera>
 ```
 
 Déposer le CSV taxons sur le serveur et adapter `THALERA_TAXONS_CSV`.
+
+### Résolution du `cd_nom`
+
+Trois niveaux, dans l'ordre :
+
+1. **CSV** `ebms_rnfrance_taxons.csv` — instantané figé, correspondances validées.
+2. **`taxonomie.taxref`** — recherche à la volée sur `lb_nom` (règne `Animalia`,
+   ordre `Lepidoptera` privilégié en cas d'homonyme). Rattrape toute espèce
+   apparue dans EBMS depuis l'extraction du CSV.
+3. **`THALERA_CD_NOM_FALLBACK`** — dernier recours pour les agrégats
+   (`Noctua janthe/janthina`) et groupes informels (`Heterocera indet.`), qui
+   n'ont pas de `cd_nom` Taxref par nature.
+
+L'origine retenue est tracée dans `data.cd_nom_origine`
+(`csv` | `taxref` | `fallback`) ; les `fallback` sont à corriger en priorité lors
+de la validation. Récupérer le `cd_nom` générique :
+
+```sql
+SELECT cd_nom, lb_nom FROM taxonomie.taxref WHERE lb_nom = 'Lepidoptera';
+```
+
+**Sans fallback**, une occurrence non résolue est ignorée *et* le curseur
+incrémental est retenu à sa valeur : elle sera reproposée à chaque run tant que
+le taxon reste non résoluble (rien n'est perdu, mais la progression est bloquée).
+Le bilan de fin de run liste les taxons concernés, à ajouter au CSV.
 
 Installer la dépendance Python si besoin :
 
@@ -166,8 +192,13 @@ Vérifier ensuite dans l’UI : sites, visites, photos + médias, compteurs non 
 
 ```cron
 # Tous les soirs à 2h30
-30 2 * * * cd /home/geonatureadmin/modules_monitoring/thalera && /usr/bin/python3 import_ebms.py >> /var/log/thalera_import_ebms.log 2>&1
+30 2 * * * cd /home/geonatureadmin/modules_monitoring/thalera && /home/geonatureadmin/geonature/backend/venv/bin/python import_ebms.py >> /var/log/thalera_import_ebms.log 2>&1
 ```
+
+> Appeler **directement le python du venv**, ne pas activer l'environnement :
+> cron exécute les commandes avec `/bin/sh` (dash), qui ne connaît pas le builtin
+> bash `source` (`/bin/sh: 1: source: not found`). Le script charge lui-même
+> `import_ebms.env`, l'activation ne sert donc qu'à fournir `psycopg2`.
 
 Créer le fichier de log et droits d’écriture pour l’utilisateur du cron :
 
@@ -217,6 +248,7 @@ rm -f .import_ebms_state.json
 - [ ] Permissions validateurs + export (E)
 - [ ] `import_ebms.env` en place (secret entre quotes)
 - [ ] CSV taxons présent
+- [ ] `THALERA_CD_NOM_FALLBACK` renseigné
 - [ ] Trigger installé
 - [ ] Exports installés (2 boutons CSV visibles)
 - [ ] Import test (`--limit`) OK
@@ -231,6 +263,8 @@ rm -f .import_ebms_state.json
 |----------|-----------------|
 | HTTP 401 Incorrect secret | Secret tronqué (`$…`) : remettre des `'…'` dans `.env`, `unset EBMS_SECRET` |
 | Sites invisibles | Type de site `thalera` / `cor_site_type` / module non actif frontend |
-| Photo sans Taxref | Nom absent du CSV → occurrence skippée (voir stderr) |
+| Photo sans Taxref | Nom absent du CSV *et* de `taxonomie.taxref` → renseigner `THALERA_CD_NOM_FALLBACK` (voir bilan de fin de run) |
+| Import qui repasse toujours les mêmes occurrences | Curseur retenu par une occurrence non résolue : voir stderr « Curseur retenu à … » |
+| Taxon manifestement faux | `data.cd_nom_origine = 'fallback'` → à corriger en validation |
 | Compteur non validé à 0 | Trigger non installé |
 | Export 404 | Vue SQL absente → `./for_install/install_export.sh` |

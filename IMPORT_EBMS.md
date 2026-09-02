@@ -80,8 +80,25 @@ rm -f .import_ebms_state.json
 ## Cron (tous les soirs)
 
 ```cron
-30 2 * * * cd /home/zacharie/dev/monitorings-geonature/thalera && /usr/bin/python3 import_ebms.py >> /var/log/thalera_import_ebms.log 2>&1
+30 2 * * * cd /home/zacharie/dev/monitorings-geonature/thalera && /chemin/venv/bin/python import_ebms.py >> /var/log/thalera_import_ebms.log 2>&1
 ```
+
+Appeler **directement le python du venv** : cron utilise `/bin/sh` (dash), qui ne
+connaît pas le builtin bash `source` (`/bin/sh: 1: source: not found`). Le script
+charge lui-même `import_ebms.env`, l'activation ne sert qu'à fournir `psycopg2`.
 
 L'import est **incrémental** via `metadata.tracking` (fichier `.import_ebms_state.json`).  
 `--full` force un reparcours depuis le début (idempotent sur la clé `id_media_ebms`).
+
+Le curseur n'avance **jamais** au-delà d'une occurrence non importée pour une raison
+rattrapable (taxon non résolu, échec site/visite) : elle est reproposée au run suivant
+au lieu d'être perdue. Une occurrence sans photo n'a rien à importer et ne bloque pas
+la progression.
+
+## Résolution du cd_nom
+
+CSV `ebms_rnfrance_taxons.csv` → `taxonomie.taxref` (recherche sur `lb_nom`, règne
+`Animalia`, ordre `Lepidoptera` privilégié en cas d'homonyme) → `THALERA_CD_NOM_FALLBACK`.
+L'origine retenue est tracée dans `data.cd_nom_origine` (`csv` | `taxref` | `fallback`).
+Le bilan de fin de run liste les taxons que ni le CSV ni Taxref ne résolvent — c'est
+la liste à ajouter au CSV.

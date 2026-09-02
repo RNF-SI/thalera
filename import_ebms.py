@@ -328,6 +328,12 @@ class ImportStats:
     medias_created: int = 0
     medias_existing: int = 0
     max_tracking: int = 0
+    # Plus petit tracking non importé pour une raison rattrapable : le curseur
+    # incrémental ne doit pas le dépasser, sinon l'occurrence est perdue.
+    min_unresolved_tracking: int = 0
+    cd_nom_from_csv: int = 0
+    cd_nom_from_taxref: int = 0
+    cd_nom_from_fallback: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +363,10 @@ class ThaleraImporter:
         self.dry_run = dry_run
         self.cd_nom_fallback = cd_nom_fallback
         self.stats = ImportStats()
+        # Cache des recherches Taxref (négatifs compris) + noms jamais résolus
+        # par le CSV ni par Taxref, à reporter en fin de run.
+        self._taxref_cache: dict[str, int | None] = {}
+        self.unmapped_names: dict[str, int] = {}
 
         self.id_module = self._fetch_id_module()
         self.id_type_site = self._fetch_id_type_site()
@@ -436,16 +446,99 @@ class ThaleraImporter:
             return int(alt[0])
         return int(row[0])
 
-    def resolve_cd_nom(self, source: dict[str, Any]) -> int | None:
+    def lookup_taxref(self, name: str) -> int | None:
+        """Cherche un cd_ref dans taxonomie.taxref pour un nom scientifique.
+
+        Complète le CSV, qui est un instantané figé : toute espèce apparue dans
+        EBMS depuis son extraction est résolue ici à la volée. Les homonymes
+        d'autres règnes sont écartés (regne = 'Animalia') et, à nom égal, on
+        privilégie l'ordre Lepidoptera puis le nom valide (cd_nom = cd_ref).
+        """
+        clean = name.strip()
+        key = clean.lower()
+        if key in self._taxref_cache:
+            return self._taxref_cache[key]
+
+        # Passe 1 sur `lb_nom = %s` pour rester indexable (taxref ≈ 500 k lignes) ;
+        # passe 2 insensible à la casse seulement si la première ne donne rien.
+        row = None
+        with self.conn.cursor() as cur:
+            for where, param in (
+                ("lb_nom = %s", clean),
+                ("lower(lb_nom) = %s", key),
+            ):
+                cur.execute(
+                    f"""
+                    SELECT cd_ref
+                    FROM taxonomie.taxref
+                    WHERE {where}
+                      AND regne = 'Animalia'
+                    ORDER BY (COALESCE(ordre, '') = 'Lepidoptera') DESC,
+                             (cd_nom = cd_ref) DESC,
+                             cd_ref
+                    LIMIT 1
+                    """,
+                    (param,),
+                )
+                row = cur.fetchone()
+                if row:
+                    break
+
+        cd_ref = int(row[0]) if row and row[0] is not None else None
+        self._taxref_cache[key] = cd_ref
+        return cd_ref
+
+    def resolve_cd_nom(self, source: dict[str, Any]) -> tuple[int | None, str | None]:
+        """Retourne (cd_nom, origine), origine ∈ 'csv' | 'taxref' | 'fallback'.
+
+        (None, None) si aucune piste : l'occurrence est alors ignorée et le
+        curseur incrémental retenu (voir _mark_unresolved).
+        """
         taxon = source.get("taxon") or {}
-        for key in (
-            taxon.get("accepted_name"),
-            taxon.get("species"),
-            taxon.get("taxon_name"),
+        names = [
+            str(key).strip()
+            for key in (
+                taxon.get("accepted_name"),
+                taxon.get("species"),
+                taxon.get("taxon_name"),
+            )
+            if key and str(key).strip()
+        ]
+
+        for name in names:
+            if name.lower() in self.taxon_map:
+                self.stats.cd_nom_from_csv += 1
+                return self.taxon_map[name.lower()], "csv"
+
+        for name in names:
+            cd_ref = self.lookup_taxref(name)
+            if cd_ref is not None:
+                self.stats.cd_nom_from_taxref += 1
+                return cd_ref, "taxref"
+
+        # Ni CSV ni Taxref : agrégats ("Noctua janthe/janthina"), groupes
+        # informels ("Heterocera indet."), ou espèce absente de Taxref.
+        label = names[0] if names else "(sans nom)"
+        self.unmapped_names[label] = self.unmapped_names.get(label, 0) + 1
+
+        if self.cd_nom_fallback is not None:
+            self.stats.cd_nom_from_fallback += 1
+            return self.cd_nom_fallback, "fallback"
+        return None, None
+
+    def _mark_unresolved(self, tracking_i: int) -> None:
+        """Retient le plus petit tracking non importé pour une raison rattrapable.
+
+        Le curseur sauvegardé en fin de run ne doit pas le dépasser : sinon
+        l'occurrence ne sera plus jamais reproposée en mode incrémental.
+        """
+        if tracking_i <= 0:
+            return
+        if (
+            not self.stats.min_unresolved_tracking
+            or tracking_i < self.stats.min_unresolved_tracking
         ):
-            if key and str(key).strip().lower() in self.taxon_map:
-                return self.taxon_map[str(key).strip().lower()]
-        return self.cd_nom_fallback
+            self.stats.min_unresolved_tracking = tracking_i
 
     def upsert_site(self, source: dict[str, Any]) -> int | None:
         location = source.get("location") or {}
@@ -623,6 +716,7 @@ class ThaleraImporter:
         media: dict[str, str],
         *,
         cd_nom: int,
+        cd_nom_origine: str | None,
         score_ia_f: float | None,
         taxon_ebms: str | None,
     ) -> int | None:
@@ -640,6 +734,9 @@ class ThaleraImporter:
             "occurrence_source_system_key": occ.get("source_system_key"),
             "score_ia": score_ia_f,
             "taxon_ebms": taxon_ebms,
+            # 'csv' | 'taxref' | 'fallback' : un 'fallback' signale un taxon
+            # non résolu, à corriger en priorité lors de la validation.
+            "cd_nom_origine": cd_nom_origine,
             # taxon_valide volontairement absent → observation non validée
         }
 
@@ -676,6 +773,7 @@ class ThaleraImporter:
                         SET data = (COALESCE(data, '{}'::jsonb)
                                     - 'score_ia'
                                     - 'taxon_ebms'
+                                    - 'cd_nom_origine'
                                     - 'id_media_ebms'
                                     - 'id_occurrence_ebms'
                                     - 'occurrence_source_system_key')
@@ -774,15 +872,22 @@ class ThaleraImporter:
 
         medias = media_entries(source.get("occurrence") or {}, self.media_prefix)
         if not medias:
+            # Occurrence sans photo : il n'y a rien à importer, jamais. Skip
+            # définitif assumé, le curseur peut avancer.
             self.stats.observations_skipped += 1
             return
 
-        cd_nom = self.resolve_cd_nom(source)
+        cd_nom, cd_nom_origine = self.resolve_cd_nom(source)
         if cd_nom is None:
             self.stats.observations_skipped += 1
+            self._mark_unresolved(tracking_i)
             occurrence_id = source.get("id")
             name = nested_get(source, "taxon", "accepted_name") or nested_get(source, "taxon", "taxon_name")
-            print(f"  Occurrence {occurrence_id}: pas de cd_nom pour '{name}', ignorée", file=sys.stderr)
+            print(
+                f"  Occurrence {occurrence_id}: pas de cd_nom pour '{name}', ignorée "
+                f"(curseur retenu ; définir THALERA_CD_NOM_FALLBACK pour l'importer à valider)",
+                file=sys.stderr,
+            )
             return
 
         score_ia = nested_get(
@@ -807,10 +912,12 @@ class ThaleraImporter:
         id_base_site = self.upsert_site(source)
         if not id_base_site:
             self.stats.observations_skipped += 1
+            self._mark_unresolved(tracking_i)
             return
         id_base_visit = self.upsert_visit(source, id_base_site)
         if not id_base_visit:
             self.stats.observations_skipped += 1
+            self._mark_unresolved(tracking_i)
             return
 
         for media in medias:
@@ -819,6 +926,7 @@ class ThaleraImporter:
                 id_base_visit,
                 media,
                 cd_nom=cd_nom,
+                cd_nom_origine=cd_nom_origine,
                 score_ia_f=score_ia_f,
                 taxon_ebms=taxon_ebms,
             )
@@ -989,9 +1097,30 @@ def main() -> int:
             if importer.stats.max_tracking > max_tracking:
                 max_tracking = importer.stats.max_tracking
 
-        if not args.dry_run and max_tracking > tracking_gt:
-            save_state(args.state_file, max_tracking)
-            print(f"État sauvegardé : last_tracking={max_tracking} → {args.state_file}")
+        # Le curseur ne doit jamais dépasser une occurrence non importée pour
+        # une raison rattrapable, sinon elle est perdue définitivement en
+        # incrémental. On repart juste avant : les reprises sont idempotentes
+        # (clé id_media_ebms).
+        safe_tracking = max_tracking
+        unresolved = importer.stats.min_unresolved_tracking if importer else 0
+        if unresolved:
+            safe_tracking = min(safe_tracking, unresolved - 1)
+
+        if not args.dry_run and safe_tracking > tracking_gt:
+            save_state(args.state_file, safe_tracking)
+            print(f"État sauvegardé : last_tracking={safe_tracking} → {args.state_file}")
+        elif not args.dry_run and unresolved:
+            print(
+                f"État inchangé (last_tracking={tracking_gt}) : occurrence non importée "
+                f"à tracking={unresolved}, elle sera reproposée au prochain run."
+            )
+
+        if unresolved and safe_tracking < max_tracking:
+            print(
+                f"Curseur retenu à {safe_tracking} au lieu de {max_tracking} "
+                f"(occurrence non importée à tracking={unresolved}).",
+                file=sys.stderr,
+            )
 
     except Exception as exc:
         if importer is not None:
@@ -1010,8 +1139,16 @@ def main() -> int:
             f"  sites      : +{s.sites_created} / existants {s.sites_existing}\n"
             f"  visites    : +{s.visits_created} / existantes {s.visits_existing}\n"
             f"  observations: +{s.observations_created} / maj {s.observations_updated} / skip {s.observations_skipped}\n"
-            f"  médias     : +{s.medias_created} / existants {s.medias_existing}"
+            f"  médias     : +{s.medias_created} / existants {s.medias_existing}\n"
+            f"  cd_nom     : csv {s.cd_nom_from_csv} / taxref {s.cd_nom_from_taxref}"
+            f" / fallback {s.cd_nom_from_fallback}"
         )
+        if importer.unmapped_names:
+            print("\n  Taxons non résolus (ni CSV ni Taxref) :")
+            for name, nb in sorted(
+                importer.unmapped_names.items(), key=lambda kv: (-kv[1], kv[0])
+            ):
+                print(f"    {nb:>4} × {name}")
     return 0
 
 
